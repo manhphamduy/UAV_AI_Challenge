@@ -35,12 +35,15 @@ class VisDroneVideoDataset(Dataset):
             print("Cache not found. Processing annotations from scratch...")
             self.annotations = self._process_annotations()
             self.samples = list(sorted(self.annotations.keys()))
-            
+    
+            # ---> ĐIỂM SỬA LỖI QUAN TRỌNG <---
+            # Chuyển defaultdict thành dict thông thường trước khi lưu
             annotations_to_save = dict(self.annotations)
-            # Lưu vào cache cho lần sau
+    
             print(f"Saving annotations to cache: {cache_path}")
             with open(cache_path, 'wb') as f:
-                pickle.dump({'annotations': self.annotations, 'samples': self.samples}, f)
+            # Lưu dict thông thường, không phải defaultdict
+                pickle.dump({'annotations': annotations_to_save, 'samples': self.samples}, f)
             print("✅ Cache saved.")
 
         print(f"✅ Found {len(self.samples)} unique images with annotations.")
