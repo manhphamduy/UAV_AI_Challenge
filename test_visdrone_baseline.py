@@ -37,7 +37,7 @@ COLORS = [
 # ======================================================================
 def parse_args():
     parser = argparse.ArgumentParser(description='Test Baseline MobileNet on VisDrone')
-    parser.add_argument('--test_path', type=str, default='data/VisDrone2019-DET-val',
+    parser.add_argument('--test_path', type=str, default='data/VisDrone2019-DET-test-dev',
                         help='Path to test dataset')
     parser.add_argument('--output_dir', type=str, default='test_results_baseline',
                         help='Output directory')
