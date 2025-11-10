@@ -36,6 +36,7 @@ class VisDroneVideoDataset(Dataset):
             self.annotations = self._process_annotations()
             self.samples = list(sorted(self.annotations.keys()))
             
+            annotations_to_save = dict(self.annotations)
             # Lưu vào cache cho lần sau
             print(f"Saving annotations to cache: {cache_path}")
             with open(cache_path, 'wb') as f:
