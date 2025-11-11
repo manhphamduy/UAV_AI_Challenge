@@ -1,4 +1,4 @@
-# file: dataset_visdrone_vid.py (Phiên bản siêu nhẹ cho GPU Augmentation)
+# file: dataset_visdrone_vid.py (Phiên bản Hybrid)
 
 import os
 import torch
@@ -7,22 +7,17 @@ from torch.utils.data import Dataset
 from collections import defaultdict
 from tqdm import tqdm
 import pickle
-# <--- SỬA ĐỔI: Chỉ cần transforms cơ bản
-import torchvision.transforms as T
+# <--- SỬA ĐỔI: Sử dụng lại transforms.v2 để resize trên CPU
+import torchvision.transforms.v2 as T
 
 class VisDroneVideoDataset(Dataset):
-    def __init__(self, root_dir, transforms=None): # Mặc dù có transforms, chúng ta sẽ chỉ dùng ToTensor
+    def __init__(self, root_dir, transforms=None):
         self.root_dir = root_dir
         self.transforms = transforms
-        # <--- SỬA ĐỔI: Tạo một transform mặc định nếu không có
-        if self.transforms is None:
-            self.transforms = T.ToTensor()
-
+        # ... (phần code cache giữ nguyên như cũ) ...
         self.seq_dir = os.path.join(root_dir, "sequences")
         self.ann_dir = os.path.join(root_dir, "annotations")
-        
         cache_path = os.path.join(root_dir, "annotations_cache.pkl")
-
         if os.path.exists(cache_path):
             print(f"Loading annotations from cache: {cache_path}")
             with open(cache_path, 'rb') as f:
@@ -33,7 +28,6 @@ class VisDroneVideoDataset(Dataset):
         else:
             print("Cache not found. Processing annotations from scratch...")
             self._create_cache(cache_path)
-
         print(f"✅ Found {len(self.samples)} unique images with annotations.")
 
     def _create_cache(self, cache_path):
@@ -46,11 +40,10 @@ class VisDroneVideoDataset(Dataset):
         print("✅ Cache saved.")
 
     def _process_annotations(self):
+        # ... (phần code này giữ nguyên như cũ) ...
         annotations = defaultdict(lambda: {'boxes': [], 'labels': []})
         seq_names = sorted(os.listdir(self.seq_dir))
-        
         for seq_name in tqdm(seq_names, desc="Processing annotation files"):
-            # ... (phần code này giữ nguyên) ...
             ann_path = os.path.join(self.ann_dir, seq_name + ".txt")
             if not os.path.exists(ann_path): continue
             with open(ann_path) as f: lines = f.readlines()
@@ -81,9 +74,10 @@ class VisDroneVideoDataset(Dataset):
         target["area"] = area
         target["iscrowd"] = torch.zeros((boxes.shape[0],), dtype=torch.int64)
 
-        # <--- SỬA ĐỔI: Chỉ áp dụng ToTensor trên CPU
-        # img bây giờ là một tensor, nhưng target vẫn giữ nguyên
-        img = self.transforms(img)
+        # <--- SỬA ĐỔI: Áp dụng transforms.v2 trên CPU
+        # Nó sẽ resize cả ảnh và bounding box một cách chính xác
+        if self.transforms:
+            img, target = self.transforms(img, target)
             
         return img, target
 
