@@ -11,6 +11,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 from dataset_visdrone_vid import VisDroneVideoDataset
+# Giả sử file evaluate.py tồn tại và hoạt động đúng
 from evaluate import evaluate_model
 
 # ======================================================================
@@ -22,7 +23,7 @@ print(f"Using device: {device}, Found {gpu_count} GPUs.")
 num_classes = 12
 IMG_SIZE = 640
 TOTAL_EPOCHS = 40
-batch_size = 4 * gpu_count if gpu_count > 0 else 4 # Tự động tăng batch_size theo số GPU
+batch_size = 4 * gpu_count if gpu_count > 0 else 4
 LR_HEAD = 1e-4
 LR_BACKBONE = 1e-5
 WEIGHT_DECAY = 1e-4
@@ -32,6 +33,19 @@ val_path = "data/VisDrone2019-VID-val"
 pretrained_model_path = "models/img_best_model.pth"
 vid_model_path = "models/vid_best_model.pth"
 checkpoint_path = "models/vid_checkpoint_v2.pth"
+
+# ======================================================================
+# ==== SỬA LỖI 1: TỰ ĐỘNG XÓA CACHE CŨ ====
+# ======================================================================
+# Điều này đảm bảo rằng mọi thay đổi trong Dataset sẽ được áp dụng.
+train_cache_path = os.path.join(train_path, "annotations_cache.pkl")
+val_cache_path = os.path.join(val_path, "annotations_cache.pkl")
+if os.path.exists(train_cache_path):
+    os.remove(train_cache_path)
+    print(f"🧹 Removed old train cache: {train_cache_path}")
+if os.path.exists(val_cache_path):
+    os.remove(val_cache_path)
+    print(f"🧹 Removed old validation cache: {val_cache_path}")
 
 # ======================================================================
 # ==== AUGMENTATION (CPU PART with Albumentations) ====
@@ -55,12 +69,21 @@ transform_val = A.Compose([
 ], bbox_params=bbox_params)
 
 # ======================================================================
-# ==== DATASET ====
+# ==== DATASET & SỬA LỖI 2: COLLATOR BẢO VỆ ====
 # ======================================================================
+def collate_fn_robust(batch):
+    """
+    Collate function tùy chỉnh để lọc ra các sample bị lỗi (trả về None từ Dataset).
+    """
+    batch = [data for data in batch if data is not None and data[0] is not None]
+    if not batch:
+        return None, None
+    return tuple(zip(*batch))
+
 train_dataset = VisDroneVideoDataset(train_path, transforms=transform_train)
 val_dataset = VisDroneVideoDataset(val_path, transforms=transform_val)
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=lambda x: tuple(zip(*x)), num_workers=2, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=lambda x: tuple(zip(*x)), num_workers=2, pin_memory=True)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn_robust, num_workers=2, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn_robust, num_workers=2, pin_memory=True)
 print("✅ Dataloaders ready.")
 
 
@@ -86,19 +109,15 @@ print("✅ Model setup complete.")
 
 
 # ======================================================================
-# ==== CHECKPOINT LOADING ====
+# ==== CHECKPOINT LOADING (Đã sửa từ trước) ====
 # ======================================================================
 start_epoch = 0
 best_map = 0.0
 if os.path.exists(checkpoint_path):
     print(f"Resuming training from checkpoint: {checkpoint_path}")
     ckpt = torch.load(checkpoint_path, map_location=device)
-    
-    # SỬA ĐỔI: Thêm dòng này để tải lại trọng số model từ checkpoint
-    # Xử lý trường hợp model được lưu khi đang dùng DataParallel (có prefix 'module.')
     model_to_load = model.module if gpu_count > 1 else model
     model_to_load.load_state_dict(ckpt['model_state'])
-    
     optimizer.load_state_dict(ckpt['optimizer_state'])
     scheduler.load_state_dict(ckpt['scheduler_state'])
     start_epoch = ckpt['epoch'] + 1
@@ -109,16 +128,21 @@ else:
 
 
 # ======================================================================
-# ==== TRAINING LOOP ====
+# ==== TRAINING LOOP & SỬA LỖI 3: KIỂM TRA BATCH RỖNG ====
 # ======================================================================
 print(f"\n🔥 === Starting Training ({TOTAL_EPOCHS} Epochs) ===")
 for epoch in range(start_epoch, TOTAL_EPOCHS):
     model.train()
     total_loss = 0.0
+    batches_processed = 0
     current_lr = optimizer.param_groups[1]['lr']
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{TOTAL_EPOCHS} (LR={current_lr:.1e})")
 
     for images, targets in progress_bar:
+        # Kiểm tra xem collator có trả về batch rỗng không (do lọc hết sample lỗi)
+        if images is None or not images:
+            continue
+
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
             
@@ -133,10 +157,13 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
         losses.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), GRADIENT_CLIP_NORM)
         optimizer.step()
+        
         total_loss += losses.item()
+        batches_processed += 1
         progress_bar.set_postfix(loss=f"{losses.item():.4f}")
     
-    avg_loss = total_loss / len(train_loader)
+    # Tránh lỗi chia cho 0 nếu tất cả các batch đều bị lỗi
+    avg_loss = total_loss / batches_processed if batches_processed > 0 else 0.0
     print(f"📉 Epoch {epoch+1} - Train Loss: {avg_loss:.4f}")
     
     print(f"📊 Evaluating...")
