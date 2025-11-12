@@ -4,7 +4,6 @@ import torchvision
 from torch.utils.data import DataLoader
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
-# <--- SỬA ĐỔI: Import AugmentationSequential
 import kornia.augmentation as K
 import kornia.geometry as K_geom
 import torchvision.transforms.v2 as T
@@ -57,15 +56,10 @@ print("✅ CPU Dataloaders ready.")
 # ==== AUGMENTATION (GPU PART) ====
 # ======================================================================
 print("Setting up GPU-side augmentation module...")
-# <--- SỬA ĐỔI: SỬ DỤNG Kornia.AugmentationSequential
-# Đây là cách làm đúng và đơn giản nhất.
+# <--- SỬA LỖI: Xóa tham số 'return_transform' không hợp lệ
 gpu_augmentations = K.AugmentationSequential(
     K.RandomHorizontalFlip(p=0.5),
-    # Bạn có thể thêm các phép khác vào đây một cách an toàn
-    # K.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, p=0.8),
-    # K.RandomRotation(degrees=15, p=0.7),
-    data_keys=["input", "bbox"], # Quan trọng: Báo cho nó biết cần biến đổi cả bbox
-    return_transform=False, # Ta sẽ lấy transform từ hàm forward
+    data_keys=["input", "bbox"],
     same_on_batch=False
 ).to(device)
 print("✅ GPU Augmentation ready.")
@@ -119,23 +113,15 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
 
     for images, targets in progress_bar:
         images_tensor = torch.stack(images).to(device)
-        
-        # Chuẩn bị bboxes cho Kornia
-        # Kornia cần một list các tensor bounding box
         bboxes_list = [t['boxes'].to(device) for t in targets]
 
-        # <--- SỬA ĐỔI: GỌI AUGMENTATION SEQUENTIAL MỘT LẦN DUY NHẤT
-        # Nó sẽ tự động biến đổi cả ảnh và bounding box
         images_augmented, bboxes_augmented = gpu_augmentations(images_tensor, bboxes_list)
-        # -----------------------------------------------------------
-
+        
         final_images = []
         final_targets = []
         for i in range(len(images)):
-            # Lấy lại target cũ và cập nhật bounding box đã được augment
             new_target = {k: v.to(device) for k, v in targets[i].items()}
             new_target['boxes'] = bboxes_augmented[i]
-            
             final_targets.append(new_target)
             final_images.append(images_augmented[i])
             
