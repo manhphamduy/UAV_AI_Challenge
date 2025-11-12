@@ -5,8 +5,8 @@ from torch.utils.data import DataLoader
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 import kornia.augmentation as K
-# <--- SỬA LỖI TẠI ĐÂY: Import từ đúng submodule kornia.geometry.bbox
-from kornia.geometry.bbox import Boxes
+# <--- SỬA ĐỔI: Import hàm chuyển đổi định dạng bbox
+from kornia.geometry.bbox import convert_bounding_box_format
 import torchvision.transforms.v2 as T
 
 from dataset_visdrone_vid import VisDroneVideoDataset
@@ -115,16 +115,24 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
         images_tensor = torch.stack(images).to(device)
         bboxes_list = [t['boxes'].to(device) for t in targets]
 
-        # Lời gọi này giờ sẽ hoạt động vì import đã đúng
-        kornia_boxes = Boxes(bboxes_list, mode='xyxy')
+        # <--- SỬA LỖI TẠI ĐÂY: Chuyển đổi tường minh sang định dạng góc
+        # Định dạng góc của Kornia là một tensor (N, 4, 2)
+        bboxes_corners_list = [
+            convert_bounding_box_format(b, "xyxy", "vertices").view(-1, 4, 2)
+            for b in bboxes_list
+        ]
 
-        images_augmented, bboxes_augmented_obj = gpu_augmentations(images_tensor, kornia_boxes)
+        images_augmented, bboxes_corners_augmented = gpu_augmentations(images_tensor, bboxes_corners_list)
         
         final_images = []
         final_targets = []
-        for i, single_image_boxes_aug in enumerate(bboxes_augmented_obj):
+        for i in range(len(images)):
             new_target = {k: v.to(device) for k, v in targets[i].items()}
-            new_target['boxes'] = single_image_boxes_aug
+            
+            # <--- SỬA LỖI TẠI ĐÂY: Chuyển đổi tường minh ngược lại về xyxy
+            # Lấy tensor góc (N, 4, 2) và chuyển về (N, 4)
+            corners = bboxes_corners_augmented[i].view(-1, 8)
+            new_target['boxes'] = convert_bounding_box_format(corners, "vertices_plus", "xyxy")
             
             final_targets.append(new_target)
             final_images.append(images_augmented[i])
