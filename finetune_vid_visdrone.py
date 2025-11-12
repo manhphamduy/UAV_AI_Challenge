@@ -18,7 +18,7 @@ gpu_count = torch.cuda.device_count()
 print(f"Using device: {device}, Found {gpu_count} GPUs.")
 num_classes = 12
 IMG_SIZE = 640
-TOTAL_EPOCHS = 40
+TOTAL_EPOCHS = 10
 batch_size = 4
 LR_HEAD = 1e-4
 LR_BACKBONE = 1e-5
