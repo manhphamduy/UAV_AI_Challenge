@@ -1,13 +1,12 @@
 import os
 import torch
-import torch.nn as nn
 import torchvision
 from torch.utils.data import DataLoader
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
+# <--- SỬA ĐỔI: Import AugmentationSequential
 import kornia.augmentation as K
 import kornia.geometry as K_geom
-# <--- SỬA ĐỔI: Không cần import kornia.utils nữa
 import torchvision.transforms.v2 as T
 
 from dataset_visdrone_vid import VisDroneVideoDataset
@@ -58,9 +57,17 @@ print("✅ CPU Dataloaders ready.")
 # ==== AUGMENTATION (GPU PART) ====
 # ======================================================================
 print("Setting up GPU-side augmentation module...")
-gpu_augmentations = nn.ModuleList([
+# <--- SỬA ĐỔI: SỬ DỤNG Kornia.AugmentationSequential
+# Đây là cách làm đúng và đơn giản nhất.
+gpu_augmentations = K.AugmentationSequential(
     K.RandomHorizontalFlip(p=0.5),
-]).to(device)
+    # Bạn có thể thêm các phép khác vào đây một cách an toàn
+    # K.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, p=0.8),
+    # K.RandomRotation(degrees=15, p=0.7),
+    data_keys=["input", "bbox"], # Quan trọng: Báo cho nó biết cần biến đổi cả bbox
+    return_transform=False, # Ta sẽ lấy transform từ hàm forward
+    same_on_batch=False
+).to(device)
 print("✅ GPU Augmentation ready.")
 
 
@@ -75,7 +82,7 @@ if os.path.exists(pretrained_model_path):
     model.load_state_dict(torch.load(pretrained_model_path, map_location=device))
 model.to(device)
 if gpu_count > 1:
-    model = nn.DataParallel(model, device_ids=list(range(gpu_count)))
+    model = torch.nn.DataParallel(model, device_ids=list(range(gpu_count)))
 backbone_params = [p for name, p in model.named_parameters() if 'backbone' in name and p.requires_grad]
 head_params = [p for name, p in model.named_parameters() if 'backbone' not in name and p.requires_grad]
 param_groups = [{'params': backbone_params, 'lr': LR_BACKBONE}, {'params': head_params, 'lr': LR_HEAD}]
@@ -113,31 +120,22 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
     for images, targets in progress_bar:
         images_tensor = torch.stack(images).to(device)
         
-        images_augmented = images_tensor
-        batch_size_current = images_tensor.shape[0]
-        
-        # <--- SỬA LỖI TẠI ĐÂY ---
-        # Sử dụng torch.eye() để tạo ma trận đơn vị 3x3
-        # và repeat() để tạo một batch các ma trận đó.
-        transform_matrix = torch.eye(3, device=device).repeat(batch_size_current, 1, 1)
-        # ------------------------
+        # Chuẩn bị bboxes cho Kornia
+        # Kornia cần một list các tensor bounding box
+        bboxes_list = [t['boxes'].to(device) for t in targets]
 
-        for aug_layer in gpu_augmentations:
-            images_augmented, transform_this_step = aug_layer(images_augmented, return_transform=True)
-            transform_matrix = transform_this_step @ transform_matrix
-        
+        # <--- SỬA ĐỔI: GỌI AUGMENTATION SEQUENTIAL MỘT LẦN DUY NHẤT
+        # Nó sẽ tự động biến đổi cả ảnh và bounding box
+        images_augmented, bboxes_augmented = gpu_augmentations(images_tensor, bboxes_list)
+        # -----------------------------------------------------------
+
         final_images = []
         final_targets = []
         for i in range(len(images)):
-            target = targets[i]
-            boxes = target['boxes']
+            # Lấy lại target cũ và cập nhật bounding box đã được augment
+            new_target = {k: v.to(device) for k, v in targets[i].items()}
+            new_target['boxes'] = bboxes_augmented[i]
             
-            boxes_corners = K_geom.bbox_to_corners(boxes)
-            boxes_corners_aug = K_geom.transform_points(transform_matrix[i].unsqueeze(0), boxes_corners)
-            boxes_aug = K_geom.corners_to_bbox(boxes_corners_aug)
-
-            new_target = {k: v.to(device) for k, v in target.items()}
-            new_target['boxes'] = boxes_aug.to(device)
             final_targets.append(new_target)
             final_images.append(images_augmented[i])
             
