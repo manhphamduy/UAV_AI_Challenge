@@ -7,7 +7,7 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 import kornia.augmentation as K
 import kornia.geometry as K_geom
-import kornia.utils as K_utils
+# <--- SỬA ĐỔI: Không cần import kornia.utils nữa
 import torchvision.transforms.v2 as T
 
 from dataset_visdrone_vid import VisDroneVideoDataset
@@ -58,12 +58,8 @@ print("✅ CPU Dataloaders ready.")
 # ==== AUGMENTATION (GPU PART) ====
 # ======================================================================
 print("Setting up GPU-side augmentation module...")
-# <--- SỬA ĐỔI: Thay nn.Sequential bằng nn.ModuleList
-# nn.ModuleList là một container giống list nhưng đăng ký các module con đúng cách
 gpu_augmentations = nn.ModuleList([
     K.RandomHorizontalFlip(p=0.5),
-    # Bạn có thể thêm các phép augmentation khác ở đây
-    # K.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, p=0.8),
 ]).to(device)
 print("✅ GPU Augmentation ready.")
 
@@ -93,10 +89,8 @@ print("✅ Model setup complete.")
 # ======================================================================
 start_epoch = 0
 best_map = 0.0
-# ... (Phần checkpoint giữ nguyên) ...
 if os.path.exists(checkpoint_path):
     ckpt = torch.load(checkpoint_path, map_location=device)
-    # Load state_dict vào model gốc trước khi bọc DataParallel (đã làm ở trên)
     optimizer.load_state_dict(ckpt['optimizer_state'])
     scheduler.load_state_dict(ckpt['scheduler_state'])
     start_epoch = ckpt['epoch'] + 1
@@ -119,22 +113,19 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
     for images, targets in progress_bar:
         images_tensor = torch.stack(images).to(device)
         
-        # <--- SỬA LỖI TẠI ĐÂY ---
-        # Khởi tạo ma trận biến đổi là ma trận đơn vị (identity matrix)
-        # và ảnh augmented ban đầu chính là ảnh gốc.
         images_augmented = images_tensor
         batch_size_current = images_tensor.shape[0]
-        transform_matrix = K_utils.create_identity_matrix(batch_size_current).to(device)
-
-        # Áp dụng từng phép augmentation một cách tuần tự
-        for aug_layer in gpu_augmentations:
-            # Lấy ảnh đã biến đổi và ma trận của bước này
-            images_augmented, transform_this_step = aug_layer(images_augmented, return_transform=True)
-            # Cập nhật (nhân) ma trận tổng hợp
-            transform_matrix = transform_this_step @ transform_matrix
+        
+        # <--- SỬA LỖI TẠI ĐÂY ---
+        # Sử dụng torch.eye() để tạo ma trận đơn vị 3x3
+        # và repeat() để tạo một batch các ma trận đó.
+        transform_matrix = torch.eye(3, device=device).repeat(batch_size_current, 1, 1)
         # ------------------------
 
-        # Phần còn lại của vòng lặp giữ nguyên, nó sẽ sử dụng transform_matrix cuối cùng
+        for aug_layer in gpu_augmentations:
+            images_augmented, transform_this_step = aug_layer(images_augmented, return_transform=True)
+            transform_matrix = transform_this_step @ transform_matrix
+        
         final_images = []
         final_targets = []
         for i in range(len(images)):
@@ -167,7 +158,6 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
     print(f"📉 Epoch {epoch+1} - Train Loss: {avg_loss:.4f}")
     
     print(f"📊 Evaluating...")
-    # Hàm evaluate không cần thay đổi
     mAP = evaluate_model(model, val_loader, device) 
     print(f"📊 Epoch {epoch+1} - Validation mAP: {mAP:.4f}")
     
