@@ -5,7 +5,8 @@ from torch.utils.data import DataLoader
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 import kornia.augmentation as K
-import kornia.geometry as K_geom
+# <--- SỬA ĐỔI: Import đúng submodule cho bounding box
+import kornia.geometry.bbox as K_bbox
 import torchvision.transforms.v2 as T
 
 from dataset_visdrone_vid import VisDroneVideoDataset
@@ -56,10 +57,9 @@ print("✅ CPU Dataloaders ready.")
 # ==== AUGMENTATION (GPU PART) ====
 # ======================================================================
 print("Setting up GPU-side augmentation module...")
-# <--- SỬA ĐỔI: Bỏ hoàn toàn các tham số phức tạp, chỉ cần data_keys
 gpu_augmentations = K.AugmentationSequential(
     K.RandomHorizontalFlip(p=0.5),
-    data_keys=["input", "bbox"], # Báo cho Kornia biết nó sẽ nhận ảnh và bbox
+    data_keys=["input", "bbox"],
     same_on_batch=False
 ).to(device)
 print("✅ GPU Augmentation ready.")
@@ -115,23 +115,18 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
         images_tensor = torch.stack(images).to(device)
         bboxes_list = [t['boxes'].to(device) for t in targets]
 
-        # <--- SỬA LỖI TẠI ĐÂY ---
-        # 1. Chuyển đổi tường minh từ xyxy -> định dạng góc (vertices)
-        bboxes_corners_list = [K_geom.bbox_to_corners(b) for b in bboxes_list]
+        # <--- SỬA LỖI TẠI ĐÂY: Sử dụng K_bbox thay vì K_geom
+        bboxes_corners_list = [K_bbox.bbox_to_corners(b, mode='xyxy') for b in bboxes_list]
 
-        # 2. Truyền định dạng góc vào Kornia
         images_augmented, bboxes_corners_augmented = gpu_augmentations(images_tensor, bboxes_corners_list)
-        # ------------------------
         
         final_images = []
         final_targets = []
         for i in range(len(images)):
             new_target = {k: v.to(device) for k, v in targets[i].items()}
             
-            # <--- SỬA LỖI TẠI ĐÂY ---
-            # 3. Chuyển đổi tường minh từ góc -> xyxy để đưa vào model
-            new_target['boxes'] = K_geom.corners_to_bbox(bboxes_corners_augmented[i])
-            # ------------------------
+            # <--- SỬA LỖI TẠI ĐÂY: Sử dụng K_bbox thay vì K_geom
+            new_target['boxes'] = K_bbox.corners_to_bbox(bboxes_corners_augmented[i])
             
             final_targets.append(new_target)
             final_images.append(images_augmented[i])
