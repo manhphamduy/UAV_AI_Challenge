@@ -5,7 +5,6 @@ from torch.utils.data import DataLoader
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 import kornia.augmentation as K
-import kornia.geometry as K_geom
 import torchvision.transforms.v2 as T
 
 from dataset_visdrone_vid import VisDroneVideoDataset
@@ -56,10 +55,11 @@ print("✅ CPU Dataloaders ready.")
 # ==== AUGMENTATION (GPU PART) ====
 # ======================================================================
 print("Setting up GPU-side augmentation module...")
-# <--- SỬA LỖI: Xóa tham số 'return_transform' không hợp lệ
+# <--- SỬA LỖI TẠI ĐÂY: Thêm extra_args để chỉ định định dạng bbox
 gpu_augmentations = K.AugmentationSequential(
     K.RandomHorizontalFlip(p=0.5),
     data_keys=["input", "bbox"],
+    extra_args={"bbox": {"mode": "xyxy"}}, # Báo cho Kornia biết box đang ở định dạng xyxy
     same_on_batch=False
 ).to(device)
 print("✅ GPU Augmentation ready.")
@@ -69,7 +69,7 @@ print("✅ GPU Augmentation ready.")
 # ==== MODEL, OPTIMIZER, SCHEDULER ====
 # ======================================================================
 print("Setting up model, optimizer, and scheduler...")
-model = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn(weights="DEFAULT")
+model = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_3_fpn(weights="DEFAULT")
 in_features = model.roi_heads.box_predictor.cls_score.in_features
 model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 if os.path.exists(pretrained_model_path):
@@ -115,6 +115,7 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
         images_tensor = torch.stack(images).to(device)
         bboxes_list = [t['boxes'].to(device) for t in targets]
 
+        # Lệnh gọi này giờ sẽ hoạt động chính xác
         images_augmented, bboxes_augmented = gpu_augmentations(images_tensor, bboxes_list)
         
         final_images = []
