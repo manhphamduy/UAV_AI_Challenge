@@ -38,18 +38,21 @@ print("Setting up Albumentations pipelines...")
 
 bbox_params = A.BboxParams(format='pascal_voc', label_fields=['labels'], min_visibility=0.1)
 
-# <--- SỬA LỖI TẠI ĐÂY: Xóa A.Normalize khỏi pipeline
+# <--- SỬA LỖI TẠI ĐÂY: Thêm A.ToFloat để scale giá trị pixel
 transform_train = A.Compose([
     A.Resize(height=IMG_SIZE, width=IMG_SIZE),
     A.HorizontalFlip(p=0.5),
     A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, p=0.8),
-    # A.Normalize(...) ĐÃ ĐƯỢC XÓA. ToTensorV2 sẽ scale về [0, 1]
-    ToTensorV2(), 
+    # Bước 1: Chuyển đổi và scale ảnh về dải [0.0, 1.0]
+    A.ToFloat(max_value=255.0),
+    # Bước 2: Chuyển ảnh NumPy float sang Tensor PyTorch float
+    ToTensorV2(),
 ], bbox_params=bbox_params)
 
 transform_val = A.Compose([
     A.Resize(height=IMG_SIZE, width=IMG_SIZE),
-    # A.Normalize(...) ĐÃ ĐƯỢC XÓA.
+    # Chuyển đổi và scale ảnh về dải [0.0, 1.0]
+    A.ToFloat(max_value=255.0),
     ToTensorV2(),
 ], bbox_params=bbox_params)
 
