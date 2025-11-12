@@ -22,7 +22,7 @@ print(f"Using single device: {device}")
 
 num_classes = 12
 IMG_SIZE = 640
-TOTAL_EPOCHS = 40
+TOTAL_EPOCHS = 12
 # Batch size cho 1 GPU, bạn có thể điều chỉnh tùy theo bộ nhớ VRAM
 batch_size = 4 
 LR_HEAD = 1e-4
