@@ -6,12 +6,12 @@ from torch.utils.data import DataLoader
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 import kornia.augmentation as K
-# <--- SỬA ĐỔI: Sử dụng lại transforms.v2
+import kornia.geometry as K_geom
+import kornia.utils as K_utils
 import torchvision.transforms.v2 as T
 
 from dataset_visdrone_vid import VisDroneVideoDataset
-# Giả sử evaluate_model đã được sửa để hoạt động với DataParallel
-from evaluate import evaluate_model 
+from evaluate import evaluate_model
 
 # ======================================================================
 # ==== CONFIG ====
@@ -19,7 +19,6 @@ from evaluate import evaluate_model
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 gpu_count = torch.cuda.device_count()
 print(f"Using device: {device}, Found {gpu_count} GPUs.")
-# ... (Các config khác giữ nguyên) ...
 num_classes = 12
 IMG_SIZE = 640
 TOTAL_EPOCHS = 40
@@ -38,22 +37,18 @@ checkpoint_path = "models/vid_checkpoint_v2.pth"
 # ==== DATASET & AUGMENTATION (CPU PART) ====
 # ======================================================================
 print("Setting up CPU-side dataloaders and transforms...")
-# <--- SỬA ĐỔI: Đưa Resize trở lại CPU transform
 transform_train = T.Compose([
     T.ToImage(),
     T.ToDtype(torch.float32, scale=True),
-    T.Resize((IMG_SIZE, IMG_SIZE), antialias=True), # Resize ảnh và bbox trên CPU
+    T.Resize((IMG_SIZE, IMG_SIZE), antialias=True),
 ])
-
 transform_val = T.Compose([
     T.ToImage(),
     T.ToDtype(torch.float32, scale=True),
     T.Resize((IMG_SIZE, IMG_SIZE), antialias=True),
 ])
-
 train_dataset = VisDroneVideoDataset(train_path, transforms=transform_train)
 val_dataset = VisDroneVideoDataset(val_path, transforms=transform_val)
-# ... DataLoader giữ nguyên ...
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=lambda x: tuple(zip(*x)), num_workers=2, pin_memory=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=lambda x: tuple(zip(*x)), num_workers=2, pin_memory=True)
 print("✅ CPU Dataloaders ready.")
@@ -63,18 +58,19 @@ print("✅ CPU Dataloaders ready.")
 # ==== AUGMENTATION (GPU PART) ====
 # ======================================================================
 print("Setting up GPU-side augmentation module...")
-# <--- SỬA ĐỔI: Bỏ Resize khỏi Kornia, chỉ giữ lại các phép khác
-gpu_augmentations = nn.Sequential(
+# <--- SỬA ĐỔI: Thay nn.Sequential bằng nn.ModuleList
+# nn.ModuleList là một container giống list nhưng đăng ký các module con đúng cách
+gpu_augmentations = nn.ModuleList([
     K.RandomHorizontalFlip(p=0.5),
-    # K.ColorJitter(...) # Bạn vẫn có thể giữ các phép nặng ở đây
-).to(device)
+    # Bạn có thể thêm các phép augmentation khác ở đây
+    # K.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, p=0.8),
+]).to(device)
 print("✅ GPU Augmentation ready.")
 
 
 # ======================================================================
 # ==== MODEL, OPTIMIZER, SCHEDULER ====
 # ======================================================================
-# ... (Phần này giữ nguyên không đổi) ...
 print("Setting up model, optimizer, and scheduler...")
 model = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn(weights="DEFAULT")
 in_features = model.roi_heads.box_predictor.cls_score.in_features
@@ -95,11 +91,12 @@ print("✅ Model setup complete.")
 # ======================================================================
 # ==== CHECKPOINT LOADING ====
 # ======================================================================
-# ... (Phần này giữ nguyên không đổi) ...
 start_epoch = 0
 best_map = 0.0
+# ... (Phần checkpoint giữ nguyên) ...
 if os.path.exists(checkpoint_path):
     ckpt = torch.load(checkpoint_path, map_location=device)
+    # Load state_dict vào model gốc trước khi bọc DataParallel (đã làm ở trên)
     optimizer.load_state_dict(ckpt['optimizer_state'])
     scheduler.load_state_dict(ckpt['scheduler_state'])
     start_epoch = ckpt['epoch'] + 1
@@ -120,25 +117,33 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{TOTAL_EPOCHS} (LR={current_lr:.1e})")
 
     for images, targets in progress_bar:
-        # <--- SỬA ĐỔI: Luồng xử lý đơn giản hơn rất nhiều
-        # 1. Stack ảnh (đã được resize trên CPU) thành một batch tensor
         images_tensor = torch.stack(images).to(device)
         
-        # 2. Thực hiện augmentation còn lại trên GPU
-        images_augmented, transform_matrix = gpu_augmentations(images_tensor, return_transform=True)
-        
-        # 3. Chuyển targets lên GPU và cập nhật bounding box
+        # <--- SỬA LỖI TẠI ĐÂY ---
+        # Khởi tạo ma trận biến đổi là ma trận đơn vị (identity matrix)
+        # và ảnh augmented ban đầu chính là ảnh gốc.
+        images_augmented = images_tensor
+        batch_size_current = images_tensor.shape[0]
+        transform_matrix = K_utils.create_identity_matrix(batch_size_current).to(device)
+
+        # Áp dụng từng phép augmentation một cách tuần tự
+        for aug_layer in gpu_augmentations:
+            # Lấy ảnh đã biến đổi và ma trận của bước này
+            images_augmented, transform_this_step = aug_layer(images_augmented, return_transform=True)
+            # Cập nhật (nhân) ma trận tổng hợp
+            transform_matrix = transform_this_step @ transform_matrix
+        # ------------------------
+
+        # Phần còn lại của vòng lặp giữ nguyên, nó sẽ sử dụng transform_matrix cuối cùng
         final_images = []
         final_targets = []
         for i in range(len(images)):
             target = targets[i]
             boxes = target['boxes']
             
-            # Kornia có thể biến đổi bounding box bằng ma trận transform
-            # K.transform_bbox cần boxes ở định dạng (N, 4, 2)
-            boxes_corners = K.geometry.bbox_to_corners(boxes)
-            boxes_corners_aug = K.transform_points(transform_matrix[i].unsqueeze(0), boxes_corners)
-            boxes_aug = K.geometry.corners_to_bbox(boxes_corners_aug)
+            boxes_corners = K_geom.bbox_to_corners(boxes)
+            boxes_corners_aug = K_geom.transform_points(transform_matrix[i].unsqueeze(0), boxes_corners)
+            boxes_aug = K_geom.corners_to_bbox(boxes_corners_aug)
 
             new_target = {k: v.to(device) for k, v in target.items()}
             new_target['boxes'] = boxes_aug.to(device)
@@ -146,7 +151,6 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
             final_images.append(images_augmented[i])
             
         loss_dict = model(final_images, final_targets)
-        # ... (Phần còn lại của training loop giữ nguyên) ...
         losses = sum(loss for loss in loss_dict.values())
         if gpu_count > 1:
             losses = losses.mean()
@@ -163,7 +167,7 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
     print(f"📉 Epoch {epoch+1} - Train Loss: {avg_loss:.4f}")
     
     print(f"📊 Evaluating...")
-    # Cập nhật evaluate_model để không cần truyền gpu_transform nữa
+    # Hàm evaluate không cần thay đổi
     mAP = evaluate_model(model, val_loader, device) 
     print(f"📊 Epoch {epoch+1} - Validation mAP: {mAP:.4f}")
     
