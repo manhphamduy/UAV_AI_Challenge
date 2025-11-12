@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 import kornia.augmentation as K
+import kornia.geometry as K_geom
 import torchvision.transforms.v2 as T
 
 from dataset_visdrone_vid import VisDroneVideoDataset
@@ -18,7 +19,7 @@ gpu_count = torch.cuda.device_count()
 print(f"Using device: {device}, Found {gpu_count} GPUs.")
 num_classes = 12
 IMG_SIZE = 640
-TOTAL_EPOCHS = 10
+TOTAL_EPOCHS = 40
 batch_size = 4
 LR_HEAD = 1e-4
 LR_BACKBONE = 1e-5
@@ -55,11 +56,10 @@ print("✅ CPU Dataloaders ready.")
 # ==== AUGMENTATION (GPU PART) ====
 # ======================================================================
 print("Setting up GPU-side augmentation module...")
-# <--- SỬA LỖI TẠI ĐÂY: Thêm extra_args để chỉ định định dạng bbox
+# <--- SỬA ĐỔI: Bỏ hoàn toàn các tham số phức tạp, chỉ cần data_keys
 gpu_augmentations = K.AugmentationSequential(
     K.RandomHorizontalFlip(p=0.5),
-    data_keys=["input", "bbox"],
-    extra_args={"bbox": {"mode": "xyxy"}}, # Báo cho Kornia biết box đang ở định dạng xyxy
+    data_keys=["input", "bbox"], # Báo cho Kornia biết nó sẽ nhận ảnh và bbox
     same_on_batch=False
 ).to(device)
 print("✅ GPU Augmentation ready.")
@@ -115,14 +115,24 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
         images_tensor = torch.stack(images).to(device)
         bboxes_list = [t['boxes'].to(device) for t in targets]
 
-        # Lệnh gọi này giờ sẽ hoạt động chính xác
-        images_augmented, bboxes_augmented = gpu_augmentations(images_tensor, bboxes_list)
+        # <--- SỬA LỖI TẠI ĐÂY ---
+        # 1. Chuyển đổi tường minh từ xyxy -> định dạng góc (vertices)
+        bboxes_corners_list = [K_geom.bbox_to_corners(b) for b in bboxes_list]
+
+        # 2. Truyền định dạng góc vào Kornia
+        images_augmented, bboxes_corners_augmented = gpu_augmentations(images_tensor, bboxes_corners_list)
+        # ------------------------
         
         final_images = []
         final_targets = []
         for i in range(len(images)):
             new_target = {k: v.to(device) for k, v in targets[i].items()}
-            new_target['boxes'] = bboxes_augmented[i]
+            
+            # <--- SỬA LỖI TẠI ĐÂY ---
+            # 3. Chuyển đổi tường minh từ góc -> xyxy để đưa vào model
+            new_target['boxes'] = K_geom.corners_to_bbox(bboxes_corners_augmented[i])
+            # ------------------------
+            
             final_targets.append(new_target)
             final_images.append(images_augmented[i])
             
