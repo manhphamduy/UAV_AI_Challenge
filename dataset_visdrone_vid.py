@@ -1,23 +1,30 @@
-# file: dataset_visdrone_vid.py (Phiên bản Hybrid)
+# file: dataset_visdrone_vid.py (Phiên bản cho Albumentations)
 
 import os
 import torch
+import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
 from collections import defaultdict
 from tqdm import tqdm
 import pickle
-# <--- SỬA ĐỔI: Sử dụng lại transforms.v2 để resize trên CPU
-import torchvision.transforms.v2 as T
 
 class VisDroneVideoDataset(Dataset):
+    """
+    Dataset class được tối ưu hóa cho Albumentations.
+    - Đọc ảnh dưới dạng NumPy array.
+    - Áp dụng transform của Albumentations lên ảnh và bounding box.
+    - Chuyển đổi kết quả sang PyTorch Tensor.
+    """
     def __init__(self, root_dir, transforms=None):
         self.root_dir = root_dir
         self.transforms = transforms
-        # ... (phần code cache giữ nguyên như cũ) ...
         self.seq_dir = os.path.join(root_dir, "sequences")
         self.ann_dir = os.path.join(root_dir, "annotations")
+        
         cache_path = os.path.join(root_dir, "annotations_cache.pkl")
+
+        # Logic cache không thay đổi
         if os.path.exists(cache_path):
             print(f"Loading annotations from cache: {cache_path}")
             with open(cache_path, 'rb') as f:
@@ -28,6 +35,7 @@ class VisDroneVideoDataset(Dataset):
         else:
             print("Cache not found. Processing annotations from scratch...")
             self._create_cache(cache_path)
+
         print(f"✅ Found {len(self.samples)} unique images with annotations.")
 
     def _create_cache(self, cache_path):
@@ -40,7 +48,6 @@ class VisDroneVideoDataset(Dataset):
         print("✅ Cache saved.")
 
     def _process_annotations(self):
-        # ... (phần code này giữ nguyên như cũ) ...
         annotations = defaultdict(lambda: {'boxes': [], 'labels': []})
         seq_names = sorted(os.listdir(self.seq_dir))
         for seq_name in tqdm(seq_names, desc="Processing annotation files"):
@@ -61,25 +68,40 @@ class VisDroneVideoDataset(Dataset):
         img_path = self.samples[idx]
         ann = self.annotations[img_path]
         
-        img = Image.open(img_path).convert("RGB")
+        # 1. Đọc ảnh thành NumPy array, là định dạng Albumentations yêu cầu
+        image = np.array(Image.open(img_path).convert("RGB"))
         
-        boxes = torch.as_tensor(ann['boxes'], dtype=torch.float32)
-        labels = torch.as_tensor(ann['labels'], dtype=torch.int64)
+        boxes = ann['boxes']
+        labels = ann['labels']
+        
+        # 2. Áp dụng transform của Albumentations
+        if self.transforms:
+            transformed = self.transforms(image=image, bboxes=boxes, labels=labels)
+            image = transformed['image']
+            boxes = transformed['bboxes']
+            labels = transformed['labels']
+
+        # 3. Chuyển đổi sang định dạng PyTorch yêu cầu
+        # ToTensorV2 của Albumentations đã chuyển ảnh sang C, H, W tensor
+        # Ta cần đảm bảo boxes và labels cũng là tensor
+        boxes = torch.as_tensor(boxes, dtype=torch.float32)
+        labels = torch.as_tensor(labels, dtype=torch.int64)
 
         target = {}
         target["boxes"] = boxes
         target["labels"] = labels
         target["image_id"] = torch.tensor([idx])
-        area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        
+        # Tính toán lại area và iscrowd sau khi augment (có thể có box bị xóa)
+        if boxes.shape[0] > 0:
+            area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        else: # Nếu không còn box nào sau khi augment
+            area = torch.tensor([], dtype=torch.float32)
+            
         target["area"] = area
         target["iscrowd"] = torch.zeros((boxes.shape[0],), dtype=torch.int64)
-
-        # <--- SỬA ĐỔI: Áp dụng transforms.v2 trên CPU
-        # Nó sẽ resize cả ảnh và bounding box một cách chính xác
-        if self.transforms:
-            img, target = self.transforms(img, target)
             
-        return img, target
+        return image, target
 
     def __len__(self):
         return len(self.samples)
