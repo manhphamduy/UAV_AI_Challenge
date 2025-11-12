@@ -69,7 +69,7 @@ print("✅ GPU Augmentation ready.")
 # ==== MODEL, OPTIMIZER, SCHEDULER ====
 # ======================================================================
 print("Setting up model, optimizer, and scheduler...")
-model = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_3_fpn(weights="DEFAULT")
+model = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn(weights="DEFAULT")
 in_features = model.roi_heads.box_predictor.cls_score.in_features
 model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 if os.path.exists(pretrained_model_path):
