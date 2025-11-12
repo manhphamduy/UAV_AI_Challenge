@@ -1,4 +1,4 @@
-# file: dataset_visdrone_vid.py (Phiên bản cho Albumentations)
+# file: dataset_visdrone_vid.py
 
 import os
 import torch
@@ -8,11 +8,12 @@ from torch.utils.data import Dataset
 from collections import defaultdict
 from tqdm import tqdm
 import pickle
+import cv2  # SỬA ĐỔI 1: Thêm thư viện OpenCV
 
 class VisDroneVideoDataset(Dataset):
     """
     Dataset class được tối ưu hóa cho Albumentations.
-    - Đọc ảnh dưới dạng NumPy array.
+    - Đọc ảnh dưới dạng NumPy array bằng OpenCV để đảm bảo luôn có 3 kênh màu.
     - Áp dụng transform của Albumentations lên ảnh và bounding box.
     - Chuyển đổi kết quả sang PyTorch Tensor.
     """
@@ -24,7 +25,6 @@ class VisDroneVideoDataset(Dataset):
         
         cache_path = os.path.join(root_dir, "annotations_cache.pkl")
 
-        # Logic cache không thay đổi
         if os.path.exists(cache_path):
             print(f"Loading annotations from cache: {cache_path}")
             with open(cache_path, 'rb') as f:
@@ -68,22 +68,27 @@ class VisDroneVideoDataset(Dataset):
         img_path = self.samples[idx]
         ann = self.annotations[img_path]
         
-        # 1. Đọc ảnh thành NumPy array, là định dạng Albumentations yêu cầu
-        image = np.array(Image.open(img_path).convert("RGB"))
+        # SỬA ĐỔI 2: Thay thế PIL bằng OpenCV để đọc ảnh. Cách này ổn định hơn và
+        # đảm bảo ảnh luôn có 3 kênh (ngay cả khi ảnh gốc là grayscale).
+        image = cv2.imread(img_path)
+        
+        # Xử lý trường hợp file ảnh bị lỗi không đọc được
+        if image is None:
+            print(f"Warning: Could not read image {img_path}. Returning next sample.")
+            return self.__getitem__((idx + 1) % len(self))
+            
+        # OpenCV đọc ảnh mặc định là BGR, cần chuyển sang RGB cho Albumentations/PyTorch
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
         boxes = ann['boxes']
         labels = ann['labels']
         
-        # 2. Áp dụng transform của Albumentations
         if self.transforms:
             transformed = self.transforms(image=image, bboxes=boxes, labels=labels)
             image = transformed['image']
             boxes = transformed['bboxes']
             labels = transformed['labels']
 
-        # 3. Chuyển đổi sang định dạng PyTorch yêu cầu
-        # ToTensorV2 của Albumentations đã chuyển ảnh sang C, H, W tensor
-        # Ta cần đảm bảo boxes và labels cũng là tensor
         boxes = torch.as_tensor(boxes, dtype=torch.float32)
         labels = torch.as_tensor(labels, dtype=torch.int64)
 
@@ -92,10 +97,9 @@ class VisDroneVideoDataset(Dataset):
         target["labels"] = labels
         target["image_id"] = torch.tensor([idx])
         
-        # Tính toán lại area và iscrowd sau khi augment (có thể có box bị xóa)
         if boxes.shape[0] > 0:
             area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-        else: # Nếu không còn box nào sau khi augment
+        else:
             area = torch.tensor([], dtype=torch.float32)
             
         target["area"] = area

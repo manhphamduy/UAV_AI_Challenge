@@ -1,3 +1,5 @@
+# file: finetune_vid_visdrone.py
+
 import os
 import torch
 import torchvision
@@ -20,7 +22,7 @@ print(f"Using device: {device}, Found {gpu_count} GPUs.")
 num_classes = 12
 IMG_SIZE = 640
 TOTAL_EPOCHS = 40
-batch_size = 4
+batch_size = 4 * gpu_count if gpu_count > 0 else 4 # Tự động tăng batch_size theo số GPU
 LR_HEAD = 1e-4
 LR_BACKBONE = 1e-5
 WEIGHT_DECAY = 1e-4
@@ -38,18 +40,17 @@ print("Setting up Albumentations pipelines...")
 
 bbox_params = A.BboxParams(format='pascal_voc', label_fields=['labels'], min_visibility=0.1)
 
-# <--- SỬA LỖI TẠI ĐÂY: Loại bỏ A.ColorJitter để đảm bảo ổn định
 transform_train = A.Compose([
     A.Resize(height=IMG_SIZE, width=IMG_SIZE),
     A.HorizontalFlip(p=0.5),
-    # A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, p=0.8), # TẠM THỜI VÔ HIỆU HÓA
-    A.ToFloat(max_value=255.0), # Scale về [0.0, 1.0]
+    A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, p=0.8),
+    A.ToFloat(max_value=255.0),
     ToTensorV2(),
 ], bbox_params=bbox_params)
 
 transform_val = A.Compose([
     A.Resize(height=IMG_SIZE, width=IMG_SIZE),
-    A.ToFloat(max_value=255.0), # Scale về [0.0, 1.0]
+    A.ToFloat(max_value=255.0),
     ToTensorV2(),
 ], bbox_params=bbox_params)
 
@@ -70,7 +71,8 @@ print("Setting up model, optimizer, and scheduler...")
 model = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn(weights="DEFAULT")
 in_features = model.roi_heads.box_predictor.cls_score.in_features
 model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-if os.path.exists(pretrained_model_path):
+if os.path.exists(pretrained_model_path) and not os.path.exists(checkpoint_path):
+    print(f"Loading weights from pre-trained image model: {pretrained_model_path}")
     model.load_state_dict(torch.load(pretrained_model_path, map_location=device))
 model.to(device)
 if gpu_count > 1:
@@ -89,7 +91,14 @@ print("✅ Model setup complete.")
 start_epoch = 0
 best_map = 0.0
 if os.path.exists(checkpoint_path):
+    print(f"Resuming training from checkpoint: {checkpoint_path}")
     ckpt = torch.load(checkpoint_path, map_location=device)
+    
+    # SỬA ĐỔI: Thêm dòng này để tải lại trọng số model từ checkpoint
+    # Xử lý trường hợp model được lưu khi đang dùng DataParallel (có prefix 'module.')
+    model_to_load = model.module if gpu_count > 1 else model
+    model_to_load.load_state_dict(ckpt['model_state'])
+    
     optimizer.load_state_dict(ckpt['optimizer_state'])
     scheduler.load_state_dict(ckpt['scheduler_state'])
     start_epoch = ckpt['epoch'] + 1
@@ -118,6 +127,7 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
         if gpu_count > 1:
             losses = losses.mean()
         if not torch.isfinite(losses):
+            print(f"Warning: Found non-finite loss, skipping batch.")
             continue
         optimizer.zero_grad()
         losses.backward()
