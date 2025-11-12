@@ -5,8 +5,8 @@ from torch.utils.data import DataLoader
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 import kornia.augmentation as K
-# <--- SỬA ĐỔI: Import class Boxes chuyên dụng
-from kornia.geometry import Boxes
+# <--- SỬA LỖI TẠI ĐÂY: Import từ đúng submodule kornia.geometry.bbox
+from kornia.geometry.bbox import Boxes
 import torchvision.transforms.v2 as T
 
 from dataset_visdrone_vid import VisDroneVideoDataset
@@ -57,7 +57,6 @@ print("✅ CPU Dataloaders ready.")
 # ==== AUGMENTATION (GPU PART) ====
 # ======================================================================
 print("Setting up GPU-side augmentation module...")
-# AugmentationSequential không cần thay đổi, nó đã sẵn sàng để nhận đối tượng Boxes
 gpu_augmentations = K.AugmentationSequential(
     K.RandomHorizontalFlip(p=0.5),
     data_keys=["input", "bbox"],
@@ -116,19 +115,15 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
         images_tensor = torch.stack(images).to(device)
         bboxes_list = [t['boxes'].to(device) for t in targets]
 
-        # <--- SỬA LỖI TẠI ĐÂY: Bọc list các tensor vào đối tượng Boxes
-        # và chỉ rõ định dạng của chúng là 'xyxy'
+        # Lời gọi này giờ sẽ hoạt động vì import đã đúng
         kornia_boxes = Boxes(bboxes_list, mode='xyxy')
 
-        # Truyền đối tượng Boxes vào pipeline. Kornia sẽ tự xử lý.
         images_augmented, bboxes_augmented_obj = gpu_augmentations(images_tensor, kornia_boxes)
         
         final_images = []
         final_targets = []
-        # Lặp qua đối tượng Boxes đã được augment để lấy lại các tensor
         for i, single_image_boxes_aug in enumerate(bboxes_augmented_obj):
             new_target = {k: v.to(device) for k, v in targets[i].items()}
-            # Gán lại tensor box đã được augment. Kornia đảm bảo nó vẫn ở dạng xyxy.
             new_target['boxes'] = single_image_boxes_aug
             
             final_targets.append(new_target)
