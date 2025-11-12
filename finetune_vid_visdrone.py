@@ -5,7 +5,6 @@ from torch.utils.data import DataLoader
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 
-# <--- SỬA ĐỔI: Import Albumentations
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
@@ -37,20 +36,20 @@ checkpoint_path = "models/vid_checkpoint_v2.pth"
 # ======================================================================
 print("Setting up Albumentations pipelines...")
 
-# Định dạng 'pascal_voc' tương ứng với [x_min, y_min, x_max, y_max]
 bbox_params = A.BboxParams(format='pascal_voc', label_fields=['labels'], min_visibility=0.1)
 
+# <--- SỬA LỖI TẠI ĐÂY: Xóa A.Normalize khỏi pipeline
 transform_train = A.Compose([
     A.Resize(height=IMG_SIZE, width=IMG_SIZE),
     A.HorizontalFlip(p=0.5),
     A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, p=0.8),
-    A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ToTensorV2(), # Chuyển ảnh NumPy (H, W, C) sang Tensor (C, H, W)
+    # A.Normalize(...) ĐÃ ĐƯỢC XÓA. ToTensorV2 sẽ scale về [0, 1]
+    ToTensorV2(), 
 ], bbox_params=bbox_params)
 
 transform_val = A.Compose([
     A.Resize(height=IMG_SIZE, width=IMG_SIZE),
-    A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    # A.Normalize(...) ĐÃ ĐƯỢC XÓA.
     ToTensorV2(),
 ], bbox_params=bbox_params)
 
@@ -89,7 +88,6 @@ print("✅ Model setup complete.")
 # ======================================================================
 start_epoch = 0
 best_map = 0.0
-# ... (Phần checkpoint giữ nguyên) ...
 if os.path.exists(checkpoint_path):
     ckpt = torch.load(checkpoint_path, map_location=device)
     optimizer.load_state_dict(ckpt['optimizer_state'])
@@ -102,7 +100,7 @@ else:
 
 
 # ======================================================================
-# ==== TRAINING LOOP (Đơn giản hơn rất nhiều) ====
+# ==== TRAINING LOOP ====
 # ======================================================================
 print(f"\n🔥 === Starting Training ({TOTAL_EPOCHS} Epochs) ===")
 for epoch in range(start_epoch, TOTAL_EPOCHS):
@@ -112,8 +110,6 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{TOTAL_EPOCHS} (LR={current_lr:.1e})")
 
     for images, targets in progress_bar:
-        # Dữ liệu từ DataLoader đã được augment và chuyển thành Tensor
-        # Chỉ cần chuyển chúng lên GPU
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
             
@@ -134,7 +130,6 @@ for epoch in range(start_epoch, TOTAL_EPOCHS):
     print(f"📉 Epoch {epoch+1} - Train Loss: {avg_loss:.4f}")
     
     print(f"📊 Evaluating...")
-    # File evaluate.py đã viết trước đó hoạt động hoàn hảo với setup này
     mAP = evaluate_model(model, val_loader, device) 
     print(f"📊 Epoch {epoch+1} - Validation mAP: {mAP:.4f}")
     
